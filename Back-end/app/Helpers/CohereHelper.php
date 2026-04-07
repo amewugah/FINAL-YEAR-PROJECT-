@@ -13,7 +13,7 @@ class CohereHelper
      * @param string $context
      * @return string
      */
-    protected $cohereApiUrl = 'https://api.cohere.ai/v1/generate';
+    protected $cohereApiUrl = 'https://api.cohere.ai/v2/chat';
 
     public static function getNlpResponse($query, $context)
     {
@@ -21,7 +21,7 @@ class CohereHelper
 
         try {
             $cohereApiKey = config('services.cohere.api_key');  // Retrieve the API key
-            $cohereApiUrl = 'https://api.cohere.ai/v1/generate';  // Set the API URL
+            $cohereApiUrl = 'https://api.cohere.ai/v2/chat';  // Set the API URL
 
             // Modify the prompt for bulleted content
             $prompt = "Context: $context\n\nSome points are bulleted without much explanation. Expand on the following point: \"$query\" with detailed information.\n\nAnswer:";
@@ -30,20 +30,27 @@ class CohereHelper
                 'headers' => [
                     'Authorization' => 'Bearer ' . $cohereApiKey,
                     'Content-Type' => 'application/json',
+                    'Accept' => 'application/json',
                 ],
                 'json' => [
-                    'model' => 'command-xlarge-nightly',
-                    'prompt' => $prompt,
-                    'max_tokens' => 150,
+                    'model' => 'command-r-plus',
+                    'messages' => [
+                        [
+                            'role' => 'user',
+                            'content' => $prompt,
+                        ],
+                    ],
+                    'max_tokens' => 300,
                     'temperature' => 0.7,
-                    'k' => 1,
-                    'stop_sequences' => ['\n'],
                 ],
             ]);
 
             $body = json_decode($response->getBody(), true);
 
-            return $body['generations'][0]['text'] ?? 'No relevant information found.';
+            return $body['text']
+                ?? $body['message']['content'][0]['text']
+                ?? $body['output'][0]['content'][0]['text']
+                ?? 'No relevant information found.';
         } catch (\Exception $e) {
             return 'Error fetching response: ' . $e->getMessage();
         }

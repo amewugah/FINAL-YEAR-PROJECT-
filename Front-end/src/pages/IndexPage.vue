@@ -35,6 +35,7 @@
 
 <script>
 import { useChatStore } from 'src/stores/index';
+import { Notify } from 'quasar';
 
 export default {
   data() {
@@ -54,12 +55,22 @@ export default {
 
       try {
         await chatStore.login({ email: this.email, password: this.password });
+        Notify.create({
+          message: 'Login successful. Welcome back!',
+          color: 'positive',
+          icon: 'check_circle',
+        });
 
         // Redirect to the chat page after successful login
         this.$router.push('/chat/new-chat');
       } catch (err) {
         this.error = true;
         console.error('Login error:', err.message);
+        Notify.create({
+          message: 'Login failed. Please check your credentials.',
+          color: 'negative',
+          icon: 'error',
+        });
       } finally {
         this.loading = false;
       }

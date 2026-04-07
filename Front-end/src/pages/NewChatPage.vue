@@ -51,6 +51,7 @@ import { api } from 'src/boot/axios';
 import { onMounted } from 'vue'; // Import onMounted
 import { useRouter } from 'vue-router';
 import { useChatStore } from 'src/stores/index';
+import { Notify } from 'quasar';
 
 
 export default {
@@ -63,6 +64,11 @@ export default {
         await Promise.all([chatStore.fetchChats(), chatStore.fetchGroups()]);
       } catch (error) {
         console.error('Failed to fetch data', error);
+        Notify.create({
+          message: 'Session issue detected. Redirecting to login.',
+          color: 'warning',
+          icon: 'warning',
+        });
         router.push('/login');
       }
     };
@@ -108,6 +114,11 @@ export default {
         console.log("New chat created with an ID : ", this.chatid)
         this.currentText = this.botresponse
         if (response.status===200){
+          Notify.create({
+            message: 'New chat created successfully.',
+            color: 'positive',
+            icon: 'check_circle',
+          });
           this.messages.push({ sender: 'bot', text: this.currentText + ' Reloading to the chat page.' });
           this.botTyping = false;
           setTimeout(() => {
@@ -122,6 +133,12 @@ export default {
         // this.displayTypingEffect(response.data.response);
       } catch (error) {
         console.error('Error sending message:', error);
+        Notify.create({
+          message: error.response?.data?.message || 'Failed to create chat. Please try again.',
+          color: 'negative',
+          icon: 'error',
+        });
+        this.botTyping = false;
       }
     }
   },

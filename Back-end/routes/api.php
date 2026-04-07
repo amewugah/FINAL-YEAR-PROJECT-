@@ -37,10 +37,17 @@ Route::middleware('auth:api')->group(function () {
 
     // uploading of slides and creating a folder for the user
     Route::post('ai/upload-slide', [SlideController::class, 'uploadSlide']);
+    Route::get('ai/slides', [SlideController::class, 'listUserSlides']);
+    Route::delete('ai/slides/{slideId}', [SlideController::class, 'deleteSlide']);
 
     Route::post('/create/groups', [GroupController::class, 'createGroup']);
     Route::post('/groups/join/{group}', [GroupController::class, 'joinGroup']);
+    Route::post('/groups/{group}/users', [GroupController::class, 'addUserToGroup']);
+    Route::delete('/groups/{group}/users/{user}', [GroupController::class, 'removeUserFromGroup']);
+    Route::get('/groups/{group}/members', [GroupController::class, 'getGroupMembers']);
     Route::post('/groups/slides/{group}', [GroupController::class, 'uploadSlides']);
+    Route::get('/groups/slides/{group}', [GroupController::class, 'listGroupSlides']);
+    Route::delete('/groups/slides/{group}', [GroupController::class, 'deleteGroupSlide']);
     Route::post('/groups/chat/{group}', [GroupController::class, 'groupChat']);
     Route::get('/getgroups', [GroupController::class, 'getAllGroups']);
     Route::get('/groups/conversations/{groupId}', [GroupController::class, 'getGroupConversations']);
