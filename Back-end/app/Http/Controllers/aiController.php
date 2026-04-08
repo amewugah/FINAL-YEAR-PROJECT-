@@ -7,25 +7,13 @@ use App\Models\Chat;
 use App\Models\Conversation;
 use GuzzleHttp\Client;
 use Illuminate\Support\Facades\File;
+use Illuminate\Support\Facades\Log;
 use Smalot\PdfParser\Parser as PdfParser;
 use PhpOffice\PhpPresentation\IOFactory as PptParser;
-use App\Helpers\CohereHelper;
 use App\Helpers\GeminiHelper;
 
 class aiController extends Controller
 {
-    // Cohere API URL
-    protected $cohereApiUrl = 'https://api.cohere.ai/v1/generate';
-
-    // Cohere API token
-    protected $cohereApiKey;
-
-    public function __construct()
-    {
-        $this->cohereApiKey = config('services.cohere.api_key');
-
-    }
-
     /**
      * Create a new chat
      */
@@ -128,24 +116,39 @@ if (empty($chat->chat_title)) {
 
 // Get the user's ID to locate their specific folder
 $userId = auth()->id();
-$slidePath = storage_path("app/private/slides/user_{$userId}");
+$slidePaths = [
+    storage_path("app/private/slides/user_{$userId}"),
+    storage_path("app/private/private/slides/user_{$userId}"),
+];
 
-// Check if the directory exists and contains slides
-if (!file_exists($slidePath) || count(scandir($slidePath)) <= 2) { // `<= 2` because `scandir` returns `.` and `..` even if empty
+$hasSlides = false;
+foreach ($slidePaths as $path) {
+    if (file_exists($path) && count(scandir($path)) > 2) {
+        $hasSlides = true;
+        break;
+    }
+}
+
+// Check if any supported slide folder exists and contains files.
+if (!$hasSlides) { // `> 2` because `scandir` returns `.` and `..` even if empty
     return response()->json([
         'message' => 'Please upload slides to start the conversation with the AI.',
-        'slide_path' => $slidePath
+        'slide_path' => $slidePaths[0]
     ], 200);
 }
 
 // Extract text from the user's slides
-$allText = $this->extractSlidesText($slidePath);
+$allText = '';
+foreach ($slidePaths as $path) {
+    if (file_exists($path) && count(scandir($path)) > 2) {
+        $allText .= "\n" . $this->extractSlidesText($path);
+    }
+}
 
 // Get the AI-generated response
 $query = $request->input('query');
-// Use the CohereHelper to get the NLP response
-$response = CohereHelper::getNlpResponse($query, $allText);
-// $response = GeminiHelper::getNlpResponse($query, $allText);
+// Use Gemini (free tier friendly).
+$response = GeminiHelper::getNlpResponse($query, $allText);
 
 // Create a new conversation in the chat
 $conversation = Conversation::create([
@@ -244,38 +247,111 @@ private function generateChatTitle($query)
 
 
     /**
-     * Extract text from all PDF, PPT, and PPTX files in the 'slides' folder
+     * Extract text from supported files in the folder.
      */
     private function extractSlidesText($folderPath)
     {
         $allText = '';
+        $files = File::files($folderPath);
 
-        // Get all PDF, PPT, and PPTX files from the folder
-        $pdfFiles = File::glob($folderPath . '/*.pdf');
-        $pptFiles = File::glob($folderPath . '/*.ppt');
-        $pptxFiles = File::glob($folderPath . '/*.pptx');
+        foreach ($files as $file) {
+            $filePath = $file->getPathname();
+            $fileName = $file->getFilename();
+            $ext = strtolower($file->getExtension());
 
-        // Extract text from PDF files
-        foreach ($pdfFiles as $file) {
-            $parser = new PdfParser();
-            $pdf = $parser->parseFile($file);
-            $allText .= $pdf->getText() . "\n";
-        }
+            // Ignore temporary/lock files created by Office apps.
+            if (str_starts_with($fileName, '~$') || str_starts_with($fileName, '.~lock')) {
+                continue;
+            }
 
-        // Extract text from PPT and PPTX files
-        foreach (array_merge($pptFiles, $pptxFiles) as $file) {
-            $pptReader = PptParser::createReader('PowerPoint2007');
-            $presentation = $pptReader->load($file);
-
-            foreach ($presentation->getAllSlides() as $slide) {
-                foreach ($slide->getShapeCollection() as $shape) {
-                    if ($shape instanceof \PhpOffice\PhpPresentation\Shape\RichText) {
-                        $allText .= $shape->getPlainText() . "\n";
+            try {
+                if ($ext === 'pdf') {
+                    $parser = new PdfParser();
+                    $pdf = $parser->parseFile($filePath);
+                    $pages = $pdf->getPages();
+                    if (!empty($pages)) {
+                        foreach ($pages as $idx => $page) {
+                            $pageText = trim($page->getText());
+                            if ($pageText !== '') {
+                                $allText .= "[SOURCE: {$fileName} p." . ($idx + 1) . "] " . $pageText . "\n";
+                            }
+                        }
+                    } else {
+                        $allText .= "[SOURCE: {$fileName}] " . $pdf->getText() . "\n";
                     }
+                    continue;
                 }
+
+                if ($ext === 'ppt' || $ext === 'pptx') {
+                    $pptReader = PptParser::createReader('PowerPoint2007');
+                    $presentation = $pptReader->load($filePath);
+                    foreach ($presentation->getAllSlides() as $slideIndex => $slide) {
+                        $slideText = '';
+                        foreach ($slide->getShapeCollection() as $shape) {
+                            if ($shape instanceof \PhpOffice\PhpPresentation\Shape\RichText) {
+                                $slideText .= ' ' . $shape->getPlainText();
+                            }
+                        }
+                        $slideText = trim($slideText);
+                        if ($slideText !== '') {
+                            $allText .= "[SOURCE: {$fileName} slide " . ($slideIndex + 1) . "] {$slideText}\n";
+                        }
+                    }
+                    continue;
+                }
+
+                if ($ext === 'docx' || $ext === 'xlsx') {
+                    $allText .= "[SOURCE: {$fileName}] " . $this->extractFromOpenXml($filePath, $ext) . "\n";
+                    continue;
+                }
+
+                if ($ext === 'txt' || $ext === 'csv') {
+                    $allText .= "[SOURCE: {$fileName}] " . file_get_contents($filePath) . "\n";
+                    continue;
+                }
+
+                if ($ext === 'doc' || $ext === 'xls') {
+                    $allText .= "[SOURCE: {$fileName}] " . $this->extractFromLegacyBinary($filePath) . "\n";
+                }
+            } catch (\Throwable $e) {
+                Log::warning('Skipping unreadable document during extraction.', [
+                    'file' => $filePath,
+                    'error' => $e->getMessage(),
+                    'userId' => auth()->id(),
+                ]);
             }
         }
 
         return $allText;
+    }
+
+    private function extractFromOpenXml($filePath, $ext)
+    {
+        $zip = new \ZipArchive();
+        $text = '';
+        if ($zip->open($filePath) !== true) {
+            return $text;
+        }
+
+        $prefix = $ext === 'docx' ? 'word/' : 'xl/';
+        for ($i = 0; $i < $zip->numFiles; $i++) {
+            $name = $zip->getNameIndex($i);
+            if (str_starts_with($name, $prefix) && str_ends_with($name, '.xml')) {
+                $content = $zip->getFromIndex($i);
+                $text .= ' ' . strip_tags(str_replace(['</w:p>', '</a:p>', '</row>'], "\n", $content));
+            }
+        }
+        $zip->close();
+        return preg_replace('/\s+/', ' ', $text);
+    }
+
+    private function extractFromLegacyBinary($filePath)
+    {
+        $raw = @file_get_contents($filePath);
+        if ($raw === false) {
+            return '';
+        }
+        $text = preg_replace('/[^[:print:]\r\n\t]/', ' ', $raw);
+        return preg_replace('/\s+/', ' ', $text);
     }
 }

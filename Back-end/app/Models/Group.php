@@ -10,7 +10,7 @@ class Group extends Model
 {
     use HasFactory;
 
-    protected $fillable = ['name', 'description'];
+    protected $fillable = ['name', 'description', 'owner_id'];
 
     public function users()
     {
@@ -20,5 +20,10 @@ class Group extends Model
     public function conversations()
     {
         return $this->hasMany(Conversation::class);
+    }
+
+    public function owner()
+    {
+        return $this->belongsTo(User::class, 'owner_id');
     }
 }

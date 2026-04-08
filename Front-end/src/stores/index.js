@@ -12,6 +12,12 @@ export const useChatStore = defineStore('chat', {
     token: null, // Store JWT token
   }),
   actions: {
+    clearSessionData() {
+      this.chats = [];
+      this.groups = [];
+      this.user = null;
+      this.token = null;
+    },
     async fetchChats() {
       try {
         const response = await api.get('/ai/chats');
@@ -35,20 +41,20 @@ export const useChatStore = defineStore('chat', {
         const response = await api.post('/login', credentials);
 
         // Extract token and user details
-        const token = response.data.access_token;
+        const token = response.data.access_token || response.data.token;
         const user = response.data.user;
+        if (!token) {
+          throw new Error('Token missing from login response');
+        }
 
         // Save details in state
         this.token = token;
         this.user = user;
-        console.log(this.token)
 
         // Save in localStorage
         localStorage.setItem('jwt_token', token);
-        localStorage.setItem('username', user.name);
-        localStorage.setItem('user_id', user.id);
-
-        console.log('Login successful:', token);
+        localStorage.setItem('username', user?.name || '');
+        localStorage.setItem('user_id', String(user?.id || ''));
         return true; // Login success
       } catch (error) {
         console.error('Login failed:', error);
