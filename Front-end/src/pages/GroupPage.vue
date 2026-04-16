@@ -59,6 +59,24 @@
               </q-list>
             </q-card>
             <q-card flat bordered class="q-mb-sm">
+              <q-card-section class="row items-center justify-between">
+                <div class="text-subtitle2">Group Invite Code</div>
+                <q-btn
+                  flat
+                  dense
+                  icon="content_copy"
+                  label="Copy"
+                  :disable="!groupInviteCode"
+                  @click="copyInviteCode"
+                />
+              </q-card-section>
+              <q-separator />
+              <q-card-section>
+                <div v-if="groupInviteCode" class="text-body1">{{ groupInviteCode }}</div>
+                <div v-else class="text-caption text-grey">Invite code unavailable.</div>
+              </q-card-section>
+            </q-card>
+            <q-card flat bordered class="q-mb-sm">
               <q-card-section class="text-subtitle2">Group Members</q-card-section>
               <q-separator />
               <q-list dense>
@@ -187,6 +205,7 @@ const groupSlides = ref([]);
 const groupOwnerId = ref(null);
 const isGroupOwner = ref(false);
 const pendingMessage = ref(null);
+const groupInviteCode = ref('');
 
 // Initialize Pusher instance
 const pusher = new Pusher('15c8098ecb1a6a3e562e', {
@@ -356,12 +375,31 @@ async function fetchGroupMembers() {
     });
     groupMembers.value = response.data?.members || [];
     groupOwnerId.value = Number(response.data?.owner_id || 0);
+    groupInviteCode.value = response.data?.invite_code || '';
     isGroupOwner.value = groupOwnerId.value === currentUserId;
   } catch (error) {
     Notify.create({
       message: 'Failed to load group members.',
       color: 'negative',
       icon: 'error',
+    });
+  }
+}
+
+async function copyInviteCode() {
+  if (!groupInviteCode.value) return;
+  try {
+    await navigator.clipboard.writeText(groupInviteCode.value);
+    Notify.create({
+      message: 'Invite code copied.',
+      color: 'positive',
+      icon: 'check_circle',
+    });
+  } catch (error) {
+    Notify.create({
+      message: 'Could not copy invite code. Copy it manually.',
+      color: 'warning',
+      icon: 'warning',
     });
   }
 }

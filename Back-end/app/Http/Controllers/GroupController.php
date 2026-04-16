@@ -15,9 +15,25 @@ use App\Helpers\BroadcastHelper;
 use Illuminate\Support\Facades\Broadcast;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 
 class GroupController extends Controller
 {
+    private function isGroupMember(Group $group, int $userId): bool
+    {
+        return $group->users()->where('users.id', $userId)->exists();
+    }
+
+    private function requireGroupMembership(Group $group)
+    {
+        $userId = (int) auth()->id();
+        if (!$this->isGroupMember($group, $userId)) {
+            return response()->json(['message' => 'You are not a member of this group.'], 403);
+        }
+
+        return null;
+    }
+
     private function resolveOwnerId(Group $group): ?int
     {
         if (!empty($group->owner_id)) {
@@ -35,6 +51,27 @@ class GroupController extends Controller
         return null;
     }
 
+    private function generateInviteCode(): string
+    {
+        do {
+            $code = strtoupper(Str::random(8));
+        } while (Group::where('invite_code', $code)->exists());
+
+        return $code;
+    }
+
+    private function ensureInviteCode(Group $group): string
+    {
+        if (!empty($group->invite_code)) {
+            return (string) $group->invite_code;
+        }
+
+        $group->invite_code = $this->generateInviteCode();
+        $group->save();
+
+        return (string) $group->invite_code;
+    }
+
      /**
      * Get conversations for a specific group.
      *
@@ -44,6 +81,9 @@ class GroupController extends Controller
     public function getGroupConversations($groupId)
     {
         $group = Group::findOrFail($groupId); // Ensure the group exists
+        if ($membershipError = $this->requireGroupMembership($group)) {
+            return $membershipError;
+        }
 
         $conversations = Conversation::where('group_id', $groupId)
             ->with('chat') // Eager load the related chat if needed
@@ -55,17 +95,37 @@ class GroupController extends Controller
     public function getGroupMembers($groupId)
     {
         $group = Group::with('users:id,name,email')->findOrFail($groupId);
+        if ($membershipError = $this->requireGroupMembership($group)) {
+            return $membershipError;
+        }
+        $inviteCode = $this->ensureInviteCode($group);
         $ownerId = $this->resolveOwnerId($group);
         return response()->json([
             'members' => $group->users,
             'owner_id' => $ownerId,
+            'invite_code' => $inviteCode,
             'current_user_id' => auth()->id(),
         ]);
     }
     // getting all groups
     public function getAllGroups()
     {
-        $groups = Group::all(); // Retrieve all groups from the database
+        $userId = (int) auth()->id();
+        $groups = Group::where(function ($query) use ($userId) {
+            $query->where('owner_id', $userId)
+                ->orWhereHas('users', function ($memberQuery) use ($userId) {
+                    $memberQuery->where('users.id', $userId);
+                });
+        })->get();
+        $groups->each(function (Group $group) {
+            $this->ensureInviteCode($group);
+
+            // Backfill legacy owner membership so owner always appears as a member.
+            $ownerId = $this->resolveOwnerId($group);
+            if (!empty($ownerId) && !$this->isGroupMember($group, (int) $ownerId)) {
+                $group->users()->syncWithoutDetaching([(int) $ownerId]);
+            }
+        });
 
         return response()->json($groups);
     }
@@ -82,23 +142,47 @@ class GroupController extends Controller
             'name' => $request->name,
             'description' => $request->description,
             'owner_id' => auth()->id(),
+            'invite_code' => $this->generateInviteCode(),
         ]);
         if (auth()->check()) {
             $group->users()->syncWithoutDetaching([auth()->id()]);
         }
 
-        return response()->json(['message' => 'Group created successfully', 'group' => $group]);
+        return response()->json([
+            'message' => 'Group created successfully',
+            'group' => $group,
+            'invite_code' => $group->invite_code,
+        ]);
     }
 
     // joining a group
     public function joinGroup($groupId)
 {
-    $user = auth()->user();
-    $group = Group::findOrFail($groupId);
+    return response()->json(['message' => 'Please join groups using invite code.'], 403);
+}
 
-    $group->users()->attach($user);
+public function joinGroupByCode(Request $request)
+{
+    $request->validate([
+        'invite_code' => 'required|string',
+    ]);
 
-    return response()->json(['message' => 'Joined group successfully']);
+    $group = Group::where('invite_code', strtoupper(trim($request->input('invite_code'))))->first();
+    if (!$group) {
+        return response()->json(['message' => 'Invalid invite code.'], 404);
+    }
+
+    $userId = (int) auth()->id();
+    if ($this->isGroupMember($group, $userId)) {
+        return response()->json(['message' => 'You are already in this group.', 'group' => $group], 200);
+    }
+
+    $group->users()->attach($userId);
+
+    return response()->json([
+        'message' => 'Joined group successfully.',
+        'group' => $group,
+    ]);
 }
 
 public function addUserToGroup(Request $request, $groupId)
@@ -108,6 +192,13 @@ public function addUserToGroup(Request $request, $groupId)
     ]);
 
     $group = Group::findOrFail($groupId);
+    if ($membershipError = $this->requireGroupMembership($group)) {
+        return $membershipError;
+    }
+    $ownerId = $this->resolveOwnerId($group);
+    if ((int) $ownerId !== (int) auth()->id()) {
+        return response()->json(['message' => 'Only the group owner can add members.'], 403);
+    }
     $userToAdd = User::where('email', $request->input('email'))->firstOrFail();
 
     $alreadyInGroup = $group->users()->where('user_id', $userToAdd->id)->exists();
@@ -130,6 +221,9 @@ public function addUserToGroup(Request $request, $groupId)
 public function removeUserFromGroup($groupId, $userId)
 {
     $group = Group::findOrFail($groupId);
+    if ($membershipError = $this->requireGroupMembership($group)) {
+        return $membershipError;
+    }
     $ownerId = $this->resolveOwnerId($group);
     if ((int) $ownerId !== (int) auth()->id()) {
         return response()->json(['message' => 'Only the group owner can remove members.'], 403);
@@ -146,6 +240,9 @@ public function uploadSlides(Request $request, $groupId)
 {
     $request->validate(['slides' => 'required|file|mimes:pdf,ppt,pptx,doc,docx,xls,xlsx,txt,csv']);
     $group = Group::findOrFail($groupId);
+    if ($membershipError = $this->requireGroupMembership($group)) {
+        return $membershipError;
+    }
 
     $folder = "groups/{$groupId}";
     $originalName = $request->file('slides')->getClientOriginalName();
@@ -156,6 +253,9 @@ public function uploadSlides(Request $request, $groupId)
 public function listGroupSlides($groupId)
 {
     $group = Group::findOrFail($groupId);
+    if ($membershipError = $this->requireGroupMembership($group)) {
+        return $membershipError;
+    }
     $ownerId = $this->resolveOwnerId($group);
     $folder = "groups/{$groupId}";
     $files = Storage::disk('local')->exists($folder)
@@ -181,6 +281,9 @@ public function deleteGroupSlide(Request $request, $groupId)
     ]);
 
     $group = Group::findOrFail($groupId);
+    if ($membershipError = $this->requireGroupMembership($group)) {
+        return $membershipError;
+    }
     $ownerId = $this->resolveOwnerId($group);
     if ((int) $ownerId !== (int) auth()->id()) {
         return response()->json(['message' => 'Only the group owner can delete slides.'], 403);
@@ -205,6 +308,9 @@ public function groupChat(Request $request, $groupId)
 
     $user = auth()->user();
     $group = Group::findOrFail($groupId);
+    if ($membershipError = $this->requireGroupMembership($group)) {
+        return $membershipError;
+    }
     $query = trim($request->input('query'));
 
     // Accept AI command variants: /ask, /ask:, /askai, /askai:

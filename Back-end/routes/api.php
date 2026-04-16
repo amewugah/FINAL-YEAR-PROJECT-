@@ -42,6 +42,7 @@ Route::middleware('auth:api')->group(function () {
 
     Route::post('/create/groups', [GroupController::class, 'createGroup']);
     Route::post('/groups/join/{group}', [GroupController::class, 'joinGroup']);
+    Route::post('/groups/join-by-code', [GroupController::class, 'joinGroupByCode']);
     Route::post('/groups/{group}/users', [GroupController::class, 'addUserToGroup']);
     Route::delete('/groups/{group}/users/{user}', [GroupController::class, 'removeUserFromGroup']);
     Route::get('/groups/{group}/members', [GroupController::class, 'getGroupMembers']);

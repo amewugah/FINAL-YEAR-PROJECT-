@@ -15,6 +15,7 @@
               <q-input filled v-model="password" type="password" label="Password" />
 
               <q-btn label="Login" color="primary" @click="handleSubmit" :loading="loading" />
+              <q-btn flat label="Create account" color="secondary" @click="$router.push('/signup')" />
 
               <q-spinner v-if="loading" />
             </q-form>

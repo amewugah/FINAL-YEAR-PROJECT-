@@ -11,6 +11,14 @@
           label="Create Group"
           @click="showCreateGroupDialog = true"
         />
+        <q-btn
+          v-if="isAuthenticated"
+          flat
+          dense
+          icon="vpn_key"
+          label="Join Group"
+          @click="showJoinGroupDialog = true"
+        />
         <q-btn v-if="isAuthenticated" flat dense icon="account_circle">
           <q-menu>
             <q-list style="min-width: 180px">
@@ -140,6 +148,24 @@
         </q-card-actions>
       </q-card>
     </q-dialog>
+
+    <q-dialog v-model="showJoinGroupDialog">
+      <q-card style="min-width: 420px">
+        <q-card-section><div class="text-h6">Join Group</div></q-card-section>
+        <q-card-section class="q-gutter-md">
+          <q-input
+            v-model="joinGroupCode"
+            label="Invite code"
+            filled
+            hint="Ask the group owner for the invite code."
+          />
+        </q-card-section>
+        <q-card-actions align="right">
+          <q-btn flat label="Cancel" v-close-popup />
+          <q-btn color="primary" label="Join" :loading="joiningGroup" @click="joinGroupByCode" />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
   </q-layout>
 </template>
 
@@ -165,6 +191,9 @@ const newGroup = ref({
 })
 const showProfileDialog = ref(false)
 const savingProfile = ref(false)
+const showJoinGroupDialog = ref(false)
+const joiningGroup = ref(false)
+const joinGroupCode = ref('')
 const profileForm = ref({
   phone: '',
   bio: '',
@@ -258,6 +287,14 @@ async function createGroup() {
       description: newGroup.value.description,
     })
     Notify.create({ message: response.data?.message || 'Group created.', color: 'positive', icon: 'check_circle' })
+    if (response.data?.invite_code) {
+      Notify.create({
+        message: `Invite code: ${response.data.invite_code}`,
+        color: 'info',
+        icon: 'vpn_key',
+        timeout: 8000,
+      })
+    }
     showCreateGroupDialog.value = false
     newGroup.value = { name: '', description: '' }
     await chatStore.fetchGroups()
@@ -269,6 +306,33 @@ async function createGroup() {
     Notify.create({ message: error.response?.data?.message || 'Failed to create group.', color: 'negative', icon: 'error' })
   } finally {
     creatingGroup.value = false
+  }
+}
+
+async function joinGroupByCode() {
+  const code = joinGroupCode.value?.trim()
+  if (!code) {
+    Notify.create({ message: 'Invite code is required.', color: 'warning', icon: 'warning' })
+    return
+  }
+
+  joiningGroup.value = true
+  try {
+    const response = await api.post('/groups/join-by-code', {
+      invite_code: code,
+    })
+    Notify.create({ message: response.data?.message || 'Joined group successfully.', color: 'positive', icon: 'check_circle' })
+    showJoinGroupDialog.value = false
+    joinGroupCode.value = ''
+    await chatStore.fetchGroups()
+    const groupId = response.data?.group?.id
+    if (groupId) {
+      router.push({ name: 'groups', params: { groupId } })
+    }
+  } catch (error) {
+    Notify.create({ message: error.response?.data?.message || 'Failed to join group.', color: 'negative', icon: 'error' })
+  } finally {
+    joiningGroup.value = false
   }
 }
 
